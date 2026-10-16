@@ -14,7 +14,6 @@
 
 #define DAP_IN_EP  0x81
 #define DAP_OUT_EP 0x02
-#define SWO_IN_EP  0x83
 
 #define CDC_IN_EP  0x84
 #define CDC_OUT_EP 0x05

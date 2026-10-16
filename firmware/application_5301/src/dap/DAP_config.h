@@ -139,10 +139,41 @@
 \param str 指向用于存储字符串的缓冲区指针（最多 60 个字符）。
 \return 字符串长度（包括终止的 NULL 字符）或 0（无字符串）。
 */
+/* DAP_Info strings. Hosts (J-Link Commander's 3rd-party CMSIS-DAP support,
+ * pyOCD, ...) query these while probing the device; akaLinkCompact answers
+ * them as well. The reference fork returned 0 for all of them, which makes a
+ * probe show up as "Unknown CMSIS-DAP". */
+#define DAP_STR_VENDOR_NAME   "akaInstruments"
+#define DAP_STR_PRODUCT_NAME  "akaLinkPro CMSIS-DAP"
+
+/* APP firmware version, patched into the APP image header at +0x10 by
+ * firmware/tools/pack.py — the same field api_param.c reports for
+ * CMD_GET_FWVER (only meaningful for the flash_dfu layout). */
+#define DAP_FW_VERSION_ADDR   ((const char *)0x80020010UL)
+
+/* Filled from the HPM OTP UID by usb_composite.c::get_device_serial_number(). */
+extern char serial_number_dynamic[33];
+
+/* Copy a NUL-terminated string into the DAP_Info data field. CMSIS-DAP expects
+ * the returned length to include the terminating NULL (0 = no string). */
+__STATIC_INLINE uint8_t DAP_CopyInfoString(char *str, const char *src, uint8_t max)
+{
+    uint8_t i = 0U;
+
+    if (src[0] == '\0') {
+        return (0U);
+    }
+    while ((i < max) && (src[i] != '\0')) {
+        str[i] = src[i];
+        i++;
+    }
+    str[i] = '\0';
+    return (uint8_t)(i + 1U);
+}
+
 __STATIC_INLINE uint8_t DAP_GetVendorString(char *str)
 {
-    (void)str;
-    return (0U);
+    return DAP_CopyInfoString(str, DAP_STR_VENDOR_NAME, 60U);
 }
 
 /** 获取产品名称字符串。
@@ -151,8 +182,7 @@ __STATIC_INLINE uint8_t DAP_GetVendorString(char *str)
 */
 __STATIC_INLINE uint8_t DAP_GetProductString(char *str)
 {
-    (void)str;
-    return (0U);
+    return DAP_CopyInfoString(str, DAP_STR_PRODUCT_NAME, 60U);
 }
 
 /** 获取序列号字符串。
@@ -161,8 +191,7 @@ __STATIC_INLINE uint8_t DAP_GetProductString(char *str)
 */
 __STATIC_INLINE uint8_t DAP_GetSerNumString(char *str)
 {
-    (void)str;
-    return (0U);
+    return DAP_CopyInfoString(str, serial_number_dynamic, 60U);
 }
 
 /** 获取目标设备供应商字符串。
@@ -211,8 +240,20 @@ __STATIC_INLINE uint8_t DAP_GetTargetBoardNameString(char *str)
 */
 __STATIC_INLINE uint8_t DAP_GetProductFirmwareVersionString(char *str)
 {
-    (void)str;
-    return (0U);
+    const char *src = DAP_FW_VERSION_ADDR;
+    uint8_t i = 0U;
+
+    /* The version field is 8 bytes. If the image was not packed (garbage/flash
+     * erased) fall back to "no string" instead of returning junk. */
+    while ((i < 8U) && (src[i] >= 0x20) && (src[i] < 0x7F)) {
+        str[i] = src[i];
+        i++;
+    }
+    if (i == 0U) {
+        return (0U);
+    }
+    str[i] = '\0';
+    return (uint8_t)(i + 1U);
 }
 
 #include "hpm_gpio_drv.h"

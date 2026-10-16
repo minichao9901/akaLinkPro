@@ -12,7 +12,12 @@
 #include "hpm_otp_drv.h"
 #include "DAP.h"
 
-#define CMSIS_DAP_INTERFACE_SIZE (9 + 7 + 7 + 7)
+/* CMSIS-DAP v2 basic profile: the DAP interface carries exactly one bulk OUT
+ * and one bulk IN endpoint (same as akaLinkCompact). The SWO streaming
+ * endpoint the APP used to add is gone — SWO is not enabled in this build
+ * (SWO_UART/SWO_MANCHESTER/SWO_STREAM are 0), so the extra endpoint was dead
+ * weight that some hosts mis-parse when they expect the basic profile. */
+#define CMSIS_DAP_INTERFACE_SIZE (9 + 7 + 7)
 
 #define USBD_WINUSB_VENDOR_CODE 0x20
 
@@ -113,13 +118,11 @@ static const uint8_t device_descriptor[] = {
 static const uint8_t config_descriptor[] = {
     USB_CONFIG_DESCRIPTOR_INIT(USB_CONFIG_SIZE, INTF_NUM, 0x01, USB_CONFIG_BUS_POWERED, USBD_MAX_POWER),
     /* Interface 0 */
-    USB_INTERFACE_DESCRIPTOR_INIT(0x00, 0x00, 0x03, 0xFF, 0x00, 0x00, 0x02),
+    USB_INTERFACE_DESCRIPTOR_INIT(0x00, 0x00, 0x02, 0xFF, 0x00, 0x00, 0x02),
     /* Endpoint OUT 2 */
     USB_ENDPOINT_DESCRIPTOR_INIT(DAP_OUT_EP, USB_ENDPOINT_TYPE_BULK, DAP_PACKET_SIZE, 0x00),
     /* Endpoint IN 1 */
     USB_ENDPOINT_DESCRIPTOR_INIT(DAP_IN_EP, USB_ENDPOINT_TYPE_BULK, DAP_PACKET_SIZE, 0x00),
-    /* Endpoint IN 2 */
-    USB_ENDPOINT_DESCRIPTOR_INIT(SWO_IN_EP, USB_ENDPOINT_TYPE_BULK, DAP_PACKET_SIZE, 0x00),
     CDC_ACM_DESCRIPTOR_INIT(0x01, CDC_INT_EP, CDC_OUT_EP, CDC_IN_EP, DAP_PACKET_SIZE, CDC_INTF_STRING_INDEX),
 #if CONFIG_CHERRYDAP_USE_MSC
     MSC_DESCRIPTOR_INIT(MSC_INTF_NUM, MSC_OUT_EP, MSC_IN_EP, DAP_PACKET_SIZE, MSC_INTF_STRING_INDEX),
@@ -129,13 +132,11 @@ static const uint8_t config_descriptor[] = {
 static const uint8_t other_speed_config_descriptor[] = {
     USB_CONFIG_DESCRIPTOR_INIT(USB_CONFIG_SIZE, INTF_NUM, 0x01, USB_CONFIG_BUS_POWERED, USBD_MAX_POWER),
     /* Interface 0 */
-    USB_INTERFACE_DESCRIPTOR_INIT(0x00, 0x00, 0x03, 0xFF, 0x00, 0x00, 0x02),
+    USB_INTERFACE_DESCRIPTOR_INIT(0x00, 0x00, 0x02, 0xFF, 0x00, 0x00, 0x02),
     /* Endpoint OUT 2 */
     USB_ENDPOINT_DESCRIPTOR_INIT(DAP_OUT_EP, USB_ENDPOINT_TYPE_BULK, DAP_PACKET_SIZE, 0x00),
     /* Endpoint IN 1 */
     USB_ENDPOINT_DESCRIPTOR_INIT(DAP_IN_EP, USB_ENDPOINT_TYPE_BULK, DAP_PACKET_SIZE, 0x00),
-    /* Endpoint IN 2 */
-    USB_ENDPOINT_DESCRIPTOR_INIT(SWO_IN_EP, USB_ENDPOINT_TYPE_BULK, DAP_PACKET_SIZE, 0x00),
     CDC_ACM_DESCRIPTOR_INIT(0x01, CDC_INT_EP, CDC_OUT_EP, CDC_IN_EP, DAP_PACKET_SIZE, CDC_INTF_STRING_INDEX),
 #if CONFIG_CHERRYDAP_USE_MSC
     MSC_DESCRIPTOR_INIT(MSC_INTF_NUM, MSC_OUT_EP, MSC_IN_EP, DAP_PACKET_SIZE, MSC_INTF_STRING_INDEX),
@@ -298,13 +299,6 @@ void dap_in_callback(uint8_t busid, uint8_t ep, uint32_t nbytes)
     }
 }
 
-void swo_in_callback(uint8_t busid, uint8_t ep, uint32_t nbytes)
-{
-    (void)busid;
-    (void)ep;
-    (void)nbytes;
-}
-
 void usbd_cdc_acm_bulk_out(uint8_t busid, uint8_t ep, uint32_t nbytes)
 {
     (void)busid;
@@ -358,10 +352,6 @@ struct usbd_endpoint dap_out_ep = {
 struct usbd_endpoint dap_in_ep = {
     .ep_addr = DAP_IN_EP,
     .ep_cb = dap_in_callback};
-
-struct usbd_endpoint swo_in_ep = {
-    .ep_addr = SWO_IN_EP,
-    .ep_cb = swo_in_callback};
 
 struct usbd_endpoint cdc_out_ep = {
     .ep_addr = CDC_OUT_EP,
@@ -437,7 +427,6 @@ void chry_dap_init(uint8_t busid, uint32_t reg_base)
     usbd_add_interface(0, &dap_intf);
     usbd_add_endpoint(0, &dap_out_ep);
     usbd_add_endpoint(0, &dap_in_ep);
-    usbd_add_endpoint(0, &swo_in_ep);
 
     /*!< cdc acm */
     usbd_add_interface(0, usbd_cdc_acm_init_intf(0, &cdc_intf1));
