@@ -13,7 +13,6 @@
 #include "hpm_usb_drv.h"
 #include "hpm_interrupt.h"
 #include "usb_config.h"
-#include "hpm_dfu_trigger.h"
 #include "api_param.h"
 #include "usb_composite.h"
 #include "led_state.h"

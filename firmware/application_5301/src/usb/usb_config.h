@@ -2,7 +2,7 @@
 /* Copyright (c) 2026 akaInstruments */
 
 /*
- * USB Configuration for akaLinkPro Application (DFU runtime)
+ * USB Configuration for akaLinkPro Application (WinUSB + CDC only)
  */
 #ifndef USB_CONFIG_H
 #define USB_CONFIG_H
@@ -25,7 +25,6 @@
 #define CONFIG_USBDEV_MAX_BUS 1
 
 #define CONFIG_USB_DEVICE 1
-#define CONFIG_USB_DEVICE_DFU 1
 #define CONFIG_USB_DEVICE_CDC 1
 #define CONFIG_USB_DEVICE_MSC 1
 

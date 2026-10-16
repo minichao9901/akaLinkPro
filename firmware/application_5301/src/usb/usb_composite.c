@@ -1,26 +1,23 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /* Copyright (c) 2026 akaInstruments */
 
+/*
+ * USB composite for the akaLinkPro APP: WinUSB (CMSIS-DAP vendor interface)
+ * + CDC-ACM (UART bridge). Custom HID, DFU runtime and WebUSB have been
+ * removed; the MSOS 2.0 descriptor set below only carries the WinUSB
+ * function subset for interface 0 (DAP), so Windows binds WinUSB to it
+ * without an INF file.
+ */
 #include "usb_composite.h"
-#include "hpm_dfu_trigger.h"
 #include "hpm_otp_drv.h"
 #include "DAP.h"
 
 #define CMSIS_DAP_INTERFACE_SIZE (9 + 7 + 7 + 7)
-#define CUSTOM_HID_LEN (9 + 9 + 7 + 7)
-#define DFU_RUNTIME_INTERFACE_SIZE (9 + 9)
-
-#define HIDRAW_INTERVAL 10
-
-#define HID_CUSTOM_REPORT_DESC_SIZE 53
 
 #define USBD_WINUSB_VENDOR_CODE 0x20
-#define USBD_WEBUSB_VENDOR_CODE 0x21
 
-#define USBD_WEBUSB_ENABLE 1
 #define USBD_BULK_ENABLE 1
 #define USBD_WINUSB_ENABLE 1
-#define USBD_DFU_RUNTIME_ENABLE 1
 
 /* WinUSB Microsoft OS 2.0 descriptor sizes */
 #define WINUSB_DESCRIPTOR_SET_HEADER_SIZE 10
@@ -30,41 +27,26 @@
 #define FUNCTION_SUBSET_LEN 160
 #define DEVICE_INTERFACE_GUIDS_FEATURE_LEN 132
 
-#define USBD_WINUSB_DESC_SET_LEN (WINUSB_DESCRIPTOR_SET_HEADER_SIZE +        \
-                                  USBD_WEBUSB_ENABLE * FUNCTION_SUBSET_LEN + \
-                                  USBD_BULK_ENABLE * FUNCTION_SUBSET_LEN +   \
-                                  USBD_DFU_RUNTIME_ENABLE * FUNCTION_SUBSET_LEN)
+#define USBD_WINUSB_DESC_SET_LEN (WINUSB_DESCRIPTOR_SET_HEADER_SIZE + \
+                                  USBD_BULK_ENABLE * FUNCTION_SUBSET_LEN)
 
-#define USBD_NUM_DEV_CAPABILITIES (USBD_WEBUSB_ENABLE + USBD_WINUSB_ENABLE)
+#define USBD_NUM_DEV_CAPABILITIES (USBD_WINUSB_ENABLE)
 
-#define USBD_WEBUSB_DESC_LEN 24
 #define USBD_WINUSB_DESC_LEN 28
 
-#define USBD_BOS_WTOTALLENGTH (0x05 +                                      \
-                               USBD_WEBUSB_DESC_LEN * USBD_WEBUSB_ENABLE + \
+#define USBD_BOS_WTOTALLENGTH (0x05 + \
                                USBD_WINUSB_DESC_LEN * USBD_WINUSB_ENABLE)
 
-#define USB_CONFIG_SIZE (9 +                                                    \
-                         CMSIS_DAP_INTERFACE_SIZE + CDC_ACM_DESCRIPTOR_LEN +    \
-                         CONFIG_CHERRYDAP_USE_CUSTOM_HID * CUSTOM_HID_LEN +     \
-                         USBD_WEBUSB_ENABLE * 9 +                               \
-                         USBD_DFU_RUNTIME_ENABLE * DFU_RUNTIME_INTERFACE_SIZE + \
+/* Interface layout: 0 = WinUSB (DAP + SWO), 1/2 = CDC-ACM, 3 = MSC (off). */
+#define USB_CONFIG_SIZE (9 +                                                 \
+                         CMSIS_DAP_INTERFACE_SIZE + CDC_ACM_DESCRIPTOR_LEN + \
                          CONFIG_CHERRYDAP_USE_MSC * MSC_DESCRIPTOR_LEN)
 
-#define INTF_NUM (1 + 2 + CONFIG_CHERRYDAP_USE_CUSTOM_HID + USBD_WEBUSB_ENABLE + USBD_DFU_RUNTIME_ENABLE + CONFIG_CHERRYDAP_USE_MSC)
-#define HID_INTF_NUM (2 + CONFIG_CHERRYDAP_USE_CUSTOM_HID)
-#define MSC_INTF_NUM (HID_INTF_NUM + CONFIG_CHERRYDAP_USE_CUSTOM_HID)
-#define WEBUSB_INTF_NUM (MSC_INTF_NUM + CONFIG_CHERRYDAP_USE_MSC)
-#define DFU_INTF_NUM (WEBUSB_INTF_NUM + 1)
+#define INTF_NUM (1 + 2 + CONFIG_CHERRYDAP_USE_MSC)
+#define MSC_INTF_NUM (3)
 
-#define DFU_INTF_STRING_INDEX 0x05
-#define WEB_INTF_STRING_INDEX 0x04
 #define MSC_INTF_STRING_INDEX 0x00
 #define CDC_INTF_STRING_INDEX 0x00
-
-#define WEBUSB_URL_STRINGS \
-    'a', 'k', 'k', 'a', 'k', 'o', '.', 'g', 'i', 't', 'h', 'u', 'b', '.', 'i', 'o', '/', 'a', 'k', 'a', 'L', 'i', 'n', 'k', 'P', 'r', 'o',
-// https://akkako.github.io/akaLinkPro/
 
 // clang-format off
 __ALIGN_BEGIN const uint8_t USBD_WinUSBDescriptorSetDescriptor[] = {
@@ -72,32 +54,6 @@ __ALIGN_BEGIN const uint8_t USBD_WinUSBDescriptorSetDescriptor[] = {
     WBVAL(WINUSB_SET_HEADER_DESCRIPTOR_TYPE), /* wDescriptorType */
     0x00, 0x00, 0x03, 0x06, /* >= Win 8.1 */  /* dwWindowsVersion*/
     WBVAL(USBD_WINUSB_DESC_SET_LEN),          /* wDescriptorSetTotalLength */
-#if (USBD_WEBUSB_ENABLE)
-    WBVAL(WINUSB_FUNCTION_SUBSET_HEADER_SIZE), // wLength
-    WBVAL(WINUSB_SUBSET_HEADER_FUNCTION_TYPE), // wDescriptorType
-    WEBUSB_INTF_NUM,                           // bFirstInterface USBD_WINUSB_IF_NUM
-    0,                                         // bReserved
-    WBVAL(FUNCTION_SUBSET_LEN),                // wSubsetLength
-    WBVAL(WINUSB_FEATURE_COMPATIBLE_ID_SIZE),  // wLength
-    WBVAL(WINUSB_FEATURE_COMPATIBLE_ID_TYPE),  // wDescriptorType
-    'W', 'I', 'N', 'U', 'S', 'B', 0, 0,        // CompatibleId
-    0, 0, 0, 0, 0, 0, 0, 0,                    // SubCompatibleId
-    WBVAL(DEVICE_INTERFACE_GUIDS_FEATURE_LEN), // wLength
-    WBVAL(WINUSB_FEATURE_REG_PROPERTY_TYPE),   // wDescriptorType
-    WBVAL(WINUSB_PROP_DATA_TYPE_REG_MULTI_SZ), // wPropertyDataType
-    WBVAL(42),                                 // wPropertyNameLength
-    'D', 0, 'e', 0, 'v', 0, 'i', 0, 'c', 0, 'e', 0,
-    'I', 0, 'n', 0, 't', 0, 'e', 0, 'r', 0, 'f', 0, 'a', 0, 'c', 0, 'e', 0,
-    'G', 0, 'U', 0, 'I', 0, 'D', 0, 's', 0, 0, 0,
-    WBVAL(80), // wPropertyDataLength
-    '{', 0,
-    '9', 0, '2', 0, 'C', 0, 'E', 0, '6', 0, '4', 0, '6', 0, '2', 0, '-', 0,
-    '9', 0, 'C', 0, '7', 0, '7', 0, '-', 0,
-    '4', 0, '6', 0, 'F', 0, 'E', 0, '-', 0,
-    '9', 0, '3', 0, '3', 0, 'B', 0, '-',
-    0, '3', 0, '1', 0, 'C', 0, 'B', 0, '9', 0, 'C', 0, '5', 0, 'A', 0, 'A', 0, '3', 0, 'B', 0, '9', 0,
-    '}', 0, 0, 0, 0, 0,
-#endif
 #if USBD_BULK_ENABLE
     WBVAL(WINUSB_FUNCTION_SUBSET_HEADER_SIZE), /* wLength */
     WBVAL(WINUSB_SUBSET_HEADER_FUNCTION_TYPE), /* wDescriptorType */
@@ -120,37 +76,9 @@ __ALIGN_BEGIN const uint8_t USBD_WinUSBDescriptorSetDescriptor[] = {
     'C', 0, 'D', 0, 'B', 0, '3', 0, 'B', 0, '5', 0, 'A', 0, 'D', 0, '-', 0,
     '2', 0, '9', 0, '3', 0, 'B', 0, '-', 0,
     '4', 0, '6', 0, '6', 0, '3', 0, '-', 0,
-    'A', 0, 'A', 0, '3', 0, '6', 0, '-',
-    0, '1', 0, 'A', 0, 'A', 0, 'E', 0, '4', 0, '6', 0, '4', 0, '6', 0, '3', 0, '7', 0, '7', 0, '6', 0,
+    'A', 0, 'A', 0, '3', 0, '6', 0, '-', 0,
+    '1', 0, 'A', 0, 'A', 0, 'E', 0, '4', 0, '6', 0, '4', 0, '6', 0, '3', 0, '7', 0, '7', 0, '6', 0,
     '}', 0, 0, 0, 0, 0,
-#endif
-#if USBD_DFU_RUNTIME_ENABLE
-    /* WinUSB function subset for the DFU runtime interface so that Windows
-     * binds WinUSB to it and libusb (dfu-util) can claim the interface. */
-    WBVAL(WINUSB_FUNCTION_SUBSET_HEADER_SIZE), /* wLength */
-    WBVAL(WINUSB_SUBSET_HEADER_FUNCTION_TYPE), /* wDescriptorType */
-    DFU_INTF_NUM,                              /* bFirstInterface */
-    0,                                         /* bReserved */
-    WBVAL(FUNCTION_SUBSET_LEN),                /* wSubsetLength */
-    WBVAL(WINUSB_FEATURE_COMPATIBLE_ID_SIZE),  /* wLength */
-    WBVAL(WINUSB_FEATURE_COMPATIBLE_ID_TYPE),  /* wDescriptorType */
-    'W', 'I', 'N', 'U', 'S', 'B', 0, 0,        /* CompatibleId*/
-    0, 0, 0, 0, 0, 0, 0, 0,                    /* SubCompatibleId*/
-    WBVAL(DEVICE_INTERFACE_GUIDS_FEATURE_LEN), /* wLength */
-    WBVAL(WINUSB_FEATURE_REG_PROPERTY_TYPE),   /* wDescriptorType */
-    WBVAL(WINUSB_PROP_DATA_TYPE_REG_MULTI_SZ), /* wPropertyDataType */
-    WBVAL(42),                                 /* wPropertyNameLength */
-    'D', 0, 'e', 0, 'v', 0, 'i', 0, 'c', 0, 'e', 0,
-    'I', 0, 'n', 0, 't', 0, 'e', 0, 'r', 0, 'f', 0, 'a', 0, 'c', 0, 'e', 0,
-    'G', 0, 'U', 0, 'I', 0, 'D', 0, 's', 0, 0, 0,
-    WBVAL(80), /* wPropertyDataLength */
-    '{', 0,
-    '8', 0, 'F', 0, '3', 0, 'A', 0, '6', 0, 'C', 0, '1', 0, 'D', 0, '-', 0,
-    '4', 0, 'B', 0, '2', 0, '7', 0, '-', 0,
-    '4', 0, 'E', 0, '9', 0, 'A', 0, '-', 0,
-    'A', 0, 'C', 0, '1', 0, '5', 0, '-',
-    0, '7', 0, 'D', 0, '2', 0, 'E', 0, '0', 0, 'B', 0, '6', 0, '9', 0, 'F', 0, '5', 0, 'C', 0, '3', 0,
-    '}', 0, 0, 0, 0, 0
 #endif
 };
 // clang-format on
@@ -161,19 +89,6 @@ __ALIGN_BEGIN const uint8_t USBD_BinaryObjectStoreDescriptor[] = {
     0x0f,                         /* bDescriptorType */
     WBVAL(USBD_BOS_WTOTALLENGTH), /* wTotalLength */
     USBD_NUM_DEV_CAPABILITIES,    /* bNumDeviceCaps */
-#if (USBD_WEBUSB_ENABLE)
-    USBD_WEBUSB_DESC_LEN,           /* bLength */
-    0x10,                           /* bDescriptorType */
-    USB_DEVICE_CAPABILITY_PLATFORM, /* bDevCapabilityType */
-    0x00,                           /* bReserved */
-    0x38, 0xB6, 0x08, 0x34,         /* PlatformCapabilityUUID */
-    0xA9, 0x09, 0xA0, 0x47,
-    0x8B, 0xFD, 0xA0, 0x76,
-    0x88, 0x15, 0xB6, 0x65,
-    WBVAL(0x0100), /* 1.00 */ /* bcdVersion */
-    USBD_WEBUSB_VENDOR_CODE,  /* bVendorCode */
-    1,                        /* iLandingPage */
-#endif
 #if (USBD_WINUSB_ENABLE)
     USBD_WINUSB_DESC_LEN,           /* bLength */
     0x10,                           /* bDescriptorType */
@@ -190,50 +105,6 @@ __ALIGN_BEGIN const uint8_t USBD_BinaryObjectStoreDescriptor[] = {
 #endif
 };
 // clang-format on
-#define URL_DESCRIPTOR_LENGTH (3 + 31)
-
-const uint8_t USBD_WebUSBURLDescriptor[URL_DESCRIPTOR_LENGTH] = {
-    URL_DESCRIPTOR_LENGTH,
-    WEBUSB_URL_TYPE,
-    WEBUSB_URL_SCHEME_HTTPS,
-    WEBUSB_URL_STRINGS};
-
-#if CONFIG_CHERRYDAP_USE_CUSTOM_HID
-// clang-format off
-#define HID_DESC()                                                                                                                   \
-    /************** Descriptor of Custom interface *****************/                                                                \
-    0x09,                                           /* bLength: Interface Descriptor size */                                         \
-    USB_DESCRIPTOR_TYPE_INTERFACE,                  /* bDescriptorType: Interface descriptor type */                                 \
-    HID_INTF_NUM,                                   /* bInterfaceNumber: Number of Interface */                                      \
-    0x00,                                           /* bAlternateSetting: Alternate setting */                                       \
-    0x02,                                           /* bNumEndpoints */                                                              \
-    0x03,                                           /* bInterfaceClass: HID */                                                       \
-    0x01,                                           /* bInterfaceSubClass : 1=BOOT, 0=no boot */                                     \
-    0x00,                                           /* nInterfaceProtocol : 0=none, 1=keyboard, 2=mouse */                           \
-    0, /* iInterface: Index of string descriptor */ /******************** Descriptor of Custom HID ********************/             \
-    0x09,                                           /* bLength: HID Descriptor size */                                               \
-    HID_DESCRIPTOR_TYPE_HID,                        /* bDescriptorType: HID */                                                       \
-    0x11,                                           /* bcdHID: HID Class Spec release number */                                      \
-    0x01,                                                                                                                            \
-    0x00,                                              /* bCountryCode: Hardware target country */                                   \
-    0x01,                                              /* bNumDescriptors: Number of HID class descriptors to follow */              \
-    0x22,                                              /* bDescriptorType */                                                         \
-    HID_CUSTOM_REPORT_DESC_SIZE,                       /* wItemLength: Total length of Report descriptor */                          \
-    0x00,                                              /******************** Descriptor of Custom in endpoint ********************/  \
-    0x07,                                              /* bLength: Endpoint Descriptor size */                                       \
-    USB_DESCRIPTOR_TYPE_ENDPOINT,                      /* bDescriptorType: */                                                        \
-    HID_IN_EP,                                         /* bEndpointAddress: Endpoint Address (IN) */                                 \
-    0x03,                                              /* bmAttributes: Interrupt endpoint */                                        \
-    WBVAL(HID_PACKET_SIZE),                            /* wMaxPacketSize: 4 Byte max */                                              \
-    HIDRAW_INTERVAL, /* bInterval: Polling Interval */ /******************** Descriptor of Custom out endpoint ********************/ \
-    0x07,                                              /* bLength: Endpoint Descriptor size */                                       \
-    USB_DESCRIPTOR_TYPE_ENDPOINT,                      /* bDescriptorType: */                                                        \
-    HID_OUT_EP,                                        /* bEndpointAddress: Endpoint Address (IN) */                                 \
-    0x03,                                              /* bmAttributes: Interrupt endpoint */                                        \
-    WBVAL(HID_PACKET_SIZE),                            /* wMaxPacketSize: 4 Byte max */                                              \
-    HIDRAW_INTERVAL                                    /* bInterval: Polling Interval */
-// clang-format on
-#endif
 
 static const uint8_t device_descriptor[] = {
     USB_DEVICE_DESCRIPTOR_INIT(USB_2_1, 0xEF, 0x02, 0x01, USBD_VID, USBD_PID, 0x0100, 0x01),
@@ -250,28 +121,8 @@ static const uint8_t config_descriptor[] = {
     /* Endpoint IN 2 */
     USB_ENDPOINT_DESCRIPTOR_INIT(SWO_IN_EP, USB_ENDPOINT_TYPE_BULK, DAP_PACKET_SIZE, 0x00),
     CDC_ACM_DESCRIPTOR_INIT(0x01, CDC_INT_EP, CDC_OUT_EP, CDC_IN_EP, DAP_PACKET_SIZE, CDC_INTF_STRING_INDEX),
-#if CONFIG_CHERRYDAP_USE_CUSTOM_HID
-    HID_DESC(),
-#endif
 #if CONFIG_CHERRYDAP_USE_MSC
     MSC_DESCRIPTOR_INIT(MSC_INTF_NUM, MSC_OUT_EP, MSC_IN_EP, DAP_PACKET_SIZE, MSC_INTF_STRING_INDEX),
-#endif
-#if USBD_WEBUSB_ENABLE
-    USB_INTERFACE_DESCRIPTOR_INIT(WEBUSB_INTF_NUM, 0x00, 0x00, 0xff, 0x00, 0x00, WEB_INTF_STRING_INDEX),
-#endif
-#if USBD_DFU_RUNTIME_ENABLE
-    /* DFU runtime interface (no endpoints, uses EP0 only) */
-    USB_INTERFACE_DESCRIPTOR_INIT(DFU_INTF_NUM, 0x00, 0x00, 0xFE, 0x01, 0x01, DFU_INTF_STRING_INDEX),
-    /* DFU Functional Descriptor */
-    0x09,
-    0x21, /* bLength, bDescriptorType = DFU_FUNCTIONAL */
-    0x0B, /* bmAttributes: bitCanDnload|bitCanUpload|bitWillDetach */
-    0xFF,
-    0x00, /* wDetachTimeOut = 255ms */
-    0x00,
-    0x10, /* wTransferSize = 4096 */
-    0x1A,
-    0x01, /* bcdDFU = 1.1a */
 #endif
 };
 
@@ -286,68 +137,10 @@ static const uint8_t other_speed_config_descriptor[] = {
     /* Endpoint IN 2 */
     USB_ENDPOINT_DESCRIPTOR_INIT(SWO_IN_EP, USB_ENDPOINT_TYPE_BULK, DAP_PACKET_SIZE, 0x00),
     CDC_ACM_DESCRIPTOR_INIT(0x01, CDC_INT_EP, CDC_OUT_EP, CDC_IN_EP, DAP_PACKET_SIZE, CDC_INTF_STRING_INDEX),
-#if CONFIG_CHERRYDAP_USE_CUSTOM_HID
-    HID_DESC(),
-#endif
 #if CONFIG_CHERRYDAP_USE_MSC
-    MSC_DESCRIPTOR_INIT(0x04, MSC_OUT_EP, MSC_IN_EP, DAP_PACKET_SIZE, MSC_INTF_STRING_INDEX),
-#endif
-#if USBD_WEBUSB_ENABLE
-    USB_INTERFACE_DESCRIPTOR_INIT(WEBUSB_INTF_NUM, 0x00, 0x00, 0xff, 0x00, 0x00, WEB_INTF_STRING_INDEX),
-#endif
-#if USBD_DFU_RUNTIME_ENABLE
-    /* DFU runtime interface (no endpoints, uses EP0 only) */
-    USB_INTERFACE_DESCRIPTOR_INIT(DFU_INTF_NUM, 0x00, 0x00, 0xFE, 0x01, 0x01, DFU_INTF_STRING_INDEX),
-    /* DFU Functional Descriptor */
-    0x09,
-    0x21, /* bLength, bDescriptorType = DFU_FUNCTIONAL */
-    0x0B, /* bmAttributes: bitCanDnload|bitCanUpload|bitWillDetach */
-    0xFF,
-    0x00, /* wDetachTimeOut = 255ms */
-    0x00,
-    0x10, /* wTransferSize = 4096 */
-    0x1A,
-    0x01, /* bcdDFU = 1.1a */
+    MSC_DESCRIPTOR_INIT(MSC_INTF_NUM, MSC_OUT_EP, MSC_IN_EP, DAP_PACKET_SIZE, MSC_INTF_STRING_INDEX),
 #endif
 };
-
-#if CONFIG_CHERRYDAP_USE_CUSTOM_HID
-// clang-format off
-/*!< custom hid report descriptor */
-const uint8_t hid_custom_report_desc[HID_CUSTOM_REPORT_DESC_SIZE] = {
-    /* USER CODE BEGIN 0 */
-    0x06, 0x00, 0xff, /* USAGE_PAGE (Vendor Defined Page 1) */
-    0x09, 0x01,       /* USAGE (Vendor Usage 1) */
-    0xa1, 0x01,       /* COLLECTION (Application) */
-    0x85, 0x02,       /*   REPORT ID (0x02) */
-    0x09, 0x02,       /*   USAGE (Vendor Usage 1) */
-    0x15, 0x00,       /*   LOGICAL_MINIMUM (0) */
-    0x25, 0xff,       /*LOGICAL_MAXIMUM (255) */
-    0x75, 0x08,       /*   REPORT_SIZE (8) */
-    0x96, 0x3f, 0x00, /*   REPORT_COUNT (63) */
-    0x81, 0x02,       /*   INPUT (Data,Var,Abs) */
-    /* <___________________________________________________> */
-    0x85, 0x01,       /*   REPORT ID (0x01) */
-    0x09, 0x03,       /*   USAGE (Vendor Usage 1) */
-    0x15, 0x00,       /*   LOGICAL_MINIMUM (0) */
-    0x25, 0xff,       /*   LOGICAL_MAXIMUM (255) */
-    0x75, 0x08,       /*   REPORT_SIZE (8) */
-    0x96, 0x3f, 0x00, /*   REPORT_COUNT (63) */
-    0x91, 0x02,       /*   OUTPUT (Data,Var,Abs) */
-
-    /* <___________________________________________________> */
-    0x85, 0x03,       /*   REPORT ID (0x03) */
-    0x09, 0x04,       /*   USAGE (Vendor Usage 1) */
-    0x15, 0x00,       /*   LOGICAL_MINIMUM (0) */
-    0x25, 0xff,       /*   LOGICAL_MAXIMUM (255) */
-    0x75, 0x08,       /*   REPORT_SIZE (8) */
-    0x96, 0x3f, 0x00, /*   REPORT_COUNT (63) */
-    0xb1, 0x02,       /*   FEATURE (Data,Var,Abs) */
-    /* USER CODE END 0 */
-    0xC0 /*     END_COLLECTION	             */
-};
-// clang-format on
-#endif
 
 char serial_number_dynamic[33] = {0}; // Dynamic serial number
 
@@ -356,8 +149,6 @@ char *string_descriptors[] = {
     "ARM",                  /* Manufacturer */
     "akaLinkPro CMSIS-DAP", /* Product */
     "Serial Number",        /* Serial Number */
-    "akaLinkPro WebUSB",
-    "akaLinkPro DFU Runtime",
 };
 
 static const uint8_t device_quality_descriptor[] = {
@@ -580,29 +371,11 @@ struct usbd_endpoint cdc_in_ep = {
     .ep_addr = CDC_IN_EP,
     .ep_cb = usbd_cdc_acm_bulk_in};
 
-#if CONFIG_CHERRYDAP_USE_CUSTOM_HID
-struct usbd_endpoint hid_custom_in_ep = {
-    .ep_addr = HID_IN_EP,
-    .ep_cb = usbd_hid_custom_in_callback,
-};
-
-struct usbd_endpoint hid_custom_out_ep = {
-    .ep_addr = HID_OUT_EP,
-    .ep_cb = usbd_hid_custom_out_callback,
-};
-#endif
-
 struct usbd_interface dap_intf;
 struct usbd_interface cdc_intf1;
 struct usbd_interface cdc_intf2;
-#if CONFIG_CHERRYDAP_USE_CUSTOM_HID
-struct usbd_interface hid_intf;
-#endif
 #if CONFIG_CHERRYDAP_USE_MSC
 struct usbd_interface msc_intf;
-#endif
-#if USBD_DFU_RUNTIME_ENABLE
-struct usbd_interface dfu_intf;
 #endif
 
 struct usb_msosv2_descriptor msosv2_desc = {
@@ -615,11 +388,6 @@ struct usb_bos_descriptor bos_desc = {
     .string = USBD_BinaryObjectStoreDescriptor,
     .string_len = USBD_BOS_WTOTALLENGTH};
 
-struct usb_webusb_descriptor webusb_url_desc = {
-    .vendor_code = USBD_WEBUSB_VENDOR_CODE,
-    .string = USBD_WebUSBURLDescriptor,
-    .string_len = URL_DESCRIPTOR_LENGTH};
-
 const struct usb_descriptor cmsisdap_descriptor = {
     .device_descriptor_callback = device_descriptor_callback,
     .config_descriptor_callback = config_descriptor_callback,
@@ -627,8 +395,7 @@ const struct usb_descriptor cmsisdap_descriptor = {
     .other_speed_descriptor_callback = other_speed_config_descriptor_callback,
     .string_descriptor_callback = string_descriptor_callback,
     .bos_descriptor = &bos_desc,
-    .msosv2_descriptor = &msosv2_desc,
-    .webusb_url_descriptor = &webusb_url_desc};
+    .msosv2_descriptor = &msosv2_desc};
 
 static void get_device_serial_number(void)
 {
@@ -678,24 +445,8 @@ void chry_dap_init(uint8_t busid, uint32_t reg_base)
     usbd_add_endpoint(0, &cdc_out_ep);
     usbd_add_endpoint(0, &cdc_in_ep);
 
-#if CONFIG_CHERRYDAP_USE_CUSTOM_HID
-    /*!< hid */
-    usbd_add_interface(0, usbd_hid_init_intf(0, &hid_intf, hid_custom_report_desc, HID_CUSTOM_REPORT_DESC_SIZE));
-    hid_intf.notify_handler = hid_custom_notify_handler;
-    usbd_add_endpoint(0, &hid_custom_in_ep);
-    usbd_add_endpoint(0, &hid_custom_out_ep);
-#endif
-
 #if CONFIG_CHERRYDAP_USE_MSC
     usbd_add_interface(0, usbd_msc_init_intf(0, &msc_intf, MSC_OUT_EP, MSC_IN_EP));
-#endif
-
-#if USBD_DFU_RUNTIME_ENABLE
-    /*!< DFU runtime — registered last; intf_num is overridden to match the
-     * descriptor position (after the unregistered WebUSB interface). */
-    usbd_add_interface(0, &dfu_intf);
-    dfu_intf.class_interface_handler = dfu_runtime_handler;
-    dfu_intf.intf_num = DFU_INTF_NUM;
 #endif
 
     usbd_initialize(busid, reg_base, usbd_event_handler);

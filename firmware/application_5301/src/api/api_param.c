@@ -4,7 +4,6 @@
 #include "api_param.h"
 #include "usb_composite.h"
 #include "led_state.h"
-#include "hpm_dfu_trigger.h"
 #include "board.h"
 
 #include <string.h>
@@ -42,7 +41,6 @@
 #define CMD_GET_FW_COMPILE_DATE (0x16)
 #define CMD_GET_BL_COMPILE_DATE (0x17)
 #define CMD_RESET_DEVICE (0xFE)
-#define CMD_ENTER_DFU (0xFF)
 
 #define PARAM_MAGIC_NUMBER (0x0D000721UL)
 /* EasyFlash ENV key that stores the whole api_param_t blob. */
@@ -143,6 +141,10 @@ void api_param_poll(void)
     }
 }
 
+/* Parameter protocol handler. It used to be called from the custom-HID OUT
+ * callback; that interface (and with it the transport for these commands) has
+ * been removed, so this function is currently kept for reference only and is
+ * not wired to any USB endpoint. */
 void api_param_proc_hid(uint8_t *req_hid, uint8_t *res_hid)
 {
     uint8_t cmd = req_hid[2];
@@ -233,9 +235,6 @@ void api_param_proc_hid(uint8_t *req_hid, uint8_t *res_hid)
     case CMD_RESET_DEVICE:
         ppor_reset_mask_set_source_enable(HPM_PPOR, ppor_reset_software);
         ppor_sw_reset(HPM_PPOR, 24);
-        break;
-    case CMD_ENTER_DFU:
-        hpm_dfu_reboot_to_dfu();
         break;
     default:
         res_hid[1] = 0x01;

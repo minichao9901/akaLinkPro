@@ -10,8 +10,9 @@ set(BOARD_SEARCH_PATH ${CMAKE_CURRENT_SOURCE_DIR}/boards)
 # Prevent SDK from forcing -u _printf_float/-u _scanf_float (saves ~31KB)
 set(HPM_SDK_LD_NO_NANO_SPECS 1)
 
-# Enable CherryUSB device stack. CDC ACM + HID + MSC classes are needed for the
-# CMSIS-DAP composite enumeration (CDC and custom-HID + MSC interfaces).
+# Enable CherryUSB device stack. The APP enumerates as WinUSB (vendor specific
+# CMSIS-DAP interface) + CDC ACM only: the custom HID, DFU runtime and WebUSB
+# interfaces have been removed.
 set(CONFIG_HPM_SPI 1)
 set(CONFIG_DMA_MGR 1)
 set(CONFIG_CHERRYRB 1)
@@ -19,18 +20,16 @@ set(CONFIG_CHERRYUSB 1)
 set(CONFIG_CHERRYUSB_DEVICE 1)
 set(CONFIG_USB_DEVICE 1)
 set(CONFIG_USB_DEVICE_CDC_ACM 1)
-set(CONFIG_USB_DEVICE_HID 1)
 set(CONFIG_USB_DEVICE_MSC 1)
-# NOTE: Do NOT set CONFIG_USB_DEVICE_DFU here.
-# The APP only needs DFU runtime (usbd_core), not DFU mode (hpm_dfu_port.c).
-# dap_main.c handles DFU DETACH/GETSTATUS/GETSTATE manually as a runtime iface.
+# NOTE: no CONFIG_USB_DEVICE_HID and no CONFIG_USB_DEVICE_DFU:
+# neither class is part of the composite device any more.
 
 # Custom linker script for the APP (DFU) layout: it reserves the first 256 bytes
 # of the APP region for the integrity/version header so the code entry moves to
 # 0x80020100 (signature stays at 0x80020000). Must be set before find_package.
-if(NOT HPM_BUILD_TYPE STREQUAL "flash_xip")
-    set(CUSTOM_GCC_LINKER_FILE ${CMAKE_CURRENT_SOURCE_DIR}/linker/flash_dfu_app.ld)
-endif()
+# Always on: both the classic flash_dfu type (older SDKs) and the flash_xip
+# emulation below (HPM SDK 1.11+ removed flash_dfu) link through this script.
+set(CUSTOM_GCC_LINKER_FILE ${CMAKE_CURRENT_SOURCE_DIR}/linker/flash_dfu_app.ld)
 
 find_package(hpm-sdk REQUIRED HINTS $ENV{HPM_SDK_BASE})
 project(akaLinkPro_App)
@@ -63,9 +62,17 @@ if(NOT HPM_BUILD_TYPE STREQUAL "flash_xip")
     sdk_linker_global_symbols("_dfu_bl_length=0x20000" "_flash_size=0xFE000")
 endif()
 
+# HPM SDK 1.11+ removed the flash_dfu build type. The build script passes
+# -DHPM_BUILD_TYPE=flash_xip together with the custom linker script above;
+# override the SDK's FLASH_XIP=1 (no .nor_cfg_option in the APP image) and
+# define FLASH_DFU=1 so the .dfu_signature lands at 0x80020000.
+if(HPM_BUILD_TYPE STREQUAL "flash_xip")
+    sdk_linker_global_symbols("_dfu_bl_length=0x20000" "_flash_size=0xFE000")
+    sdk_compile_definitions(-DFLASH_XIP=0 -DFLASH_DFU=1)
+endif()
+
 # sdk_compile_definitions(-DCONFIG_NDEBUG_CONSOLE=1)
 
-sdk_inc(${CMAKE_CURRENT_SOURCE_DIR}/src/dfu)
 sdk_inc(${CMAKE_CURRENT_SOURCE_DIR}/src/usb)
 sdk_inc(${CMAKE_CURRENT_SOURCE_DIR}/src/dap)
 sdk_inc(${CMAKE_CURRENT_SOURCE_DIR}/src/api)
@@ -77,9 +84,7 @@ sdk_inc(${CMAKE_CURRENT_SOURCE_DIR}/src/dap/SW_DP)
 sdk_inc(${CMAKE_CURRENT_SOURCE_DIR}/src/dap/JTAG_DP)
 
 sdk_app_src(src/main.c)
-sdk_app_src(src/dfu/hpm_dfu_trigger.c)
 sdk_app_src(src/usb/usb_composite.c)
-sdk_app_src(src/usb/hid_interface.c)
 sdk_app_src(src/usb/cdc_interface.c)
 sdk_app_src(src/usb/msc_interface.c)
 sdk_app_src(src/api/api_param.c)
